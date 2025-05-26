@@ -39,7 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             align-items: center;
             height: 100vh;
             margin: 0;
-            background-image: url('photo.png'); /* صورة فراشات كيوت */
+            background-image: url('photo.png'); 
             background-size: cover;
             background-repeat: no-repeat;
             background-position: center;
