@@ -1,100 +1,149 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-rem gms-toggle.bat - Disable/Enable Google Play (GMS) packages via ADB
-rem Usage: gms-toggle.bat [disable|enable|status|diag] [SERIAL_OR_HOST:PORT]
-rem If target is omitted, the script auto-detects the first connected device.
+title GMS Toggle Menu (Disable/Enable Google Play Services)
 
-set "ACTION=%~1"
-set "TARGET=%~2"
+rem Usage: Double-click or run in CMD. Script shows a numbered menu.
+rem Requires: adb in PATH or place this .bat next to adb.exe (platform-tools)
 
-if /i "%ACTION%"=="" (
-  echo Usage: %~nx0 [disable^|enable^|status^|diag] [SERIAL_OR_HOST:PORT]
-  exit /b 1
-)
+set "PACKAGES=com.google.android.gms com.google.android.gsf com.android.vending com.google.android.gsf.login com.google.android.syncadapters.calendar com.google.android.syncadapters.contacts com.google.android.onetimeinitializer com.google.android.backuptransport com.google.android.feedback com.google.android.configupdater com.google.android.partnersetup com.google.android.setupwizard com.google.android.apps.restore"
+set "TARGET="
 
 where adb >nul 2>&1
 if errorlevel 1 (
-  echo Error: adb not found in PATH. Install Platform-Tools or run from its folder.
+  echo [ERROR] adb not found in PATH. Put this .bat next to adb.exe (platform-tools).
+  echo Press any key to exit...
+  pause >nul
   exit /b 1
 )
 
 adb start-server >nul 2>&1
 
-rem Auto-detect device if TARGET not provided
+:menu
+cls
+echo ======================================================
+echo   GMS Toggle Menu - Google Play Services Controller
+echo ======================================================
+echo Target: %TARGET%
+echo.
+echo   1 ^) Disable Google Play services (GMS)
+echo   2 ^) Enable Google Play services (GMS)
+echo   3 ^) Show status (installed/enabled)
+echo   4 ^) Diagnose (ADB ^& device info)
+echo   5 ^) Change target (enter SERIAL or HOST:PORT)
+echo   0 ^) Exit
+echo.
+set "CHOICE="
+set /p "CHOICE=Choose an option [0-5]: "
+
+if "%CHOICE%"=="1" goto do_disable
+if "%CHOICE%"=="2" goto do_enable
+if "%CHOICE%"=="3" goto do_status
+if "%CHOICE%"=="4" goto do_diag
+if "%CHOICE%"=="5" goto change_target
+if "%CHOICE%"=="0" goto end
+
+echo Invalid choice.
+echo Press any key to return to menu...
+pause >nul
+goto menu
+
+:ensure_connected
+rem Auto-detect device if TARGET is empty; else ensure reachable
+set "CONNECTED_OK=no"
 if "%TARGET%"=="" (
+  rem Try to pick first 'device' from adb devices
   for /f "skip=1 tokens=1,2" %%A in ('adb devices') do (
     if "%%B"=="device" (
       set "TARGET=%%A"
-      goto :got_target
+      goto :ec_try_connect
     )
   )
-  rem Try connecting to common emulator endpoints
+  rem Try common emulator endpoints
   for %%H in (127.0.0.1:7555 127.0.0.1:5555 127.0.0.1:62001 127.0.0.1:21503 127.0.0.1:5557) do (
     adb connect %%H >nul 2>&1
   )
   for /f "skip=1 tokens=1,2" %%A in ('adb devices') do (
     if "%%B"=="device" (
       set "TARGET=%%A"
-      goto :got_target
+      goto :ec_try_connect
     )
   )
-  echo No ADB device found. Connect your emulator or pass [SERIAL_OR_HOST:PORT].
-  exit /b 1
+  goto :ec_no_device
+) else (
+  goto :ec_try_connect
 )
 
-:got_target
-adb -s "%TARGET%" shell echo ok >nul 2>&1
+:ec_try_connect
+rem If target looks like HOST:PORT, try adb connect to ensure binding
+for /f "delims=: tokens=1,2" %%H in ("%TARGET%") do set "_has_port=%%I"
+if defined _has_port (
+  adb connect "%TARGET%" >nul 2>&1
+)
+adb -s "%TARGET%" shell exit >nul 2>&1
 if errorlevel 1 (
-  echo Unable to reach "%TARGET%" via ADB. Ensure ADB is enabled and the port is correct.
-  exit /b 1
+  goto :ec_unreachable
 )
+set "CONNECTED_OK=yes"
+goto :eof
 
-set "PACKAGES=com.google.android.gms com.google.android.gsf com.android.vending com.google.android.gsf.login com.google.android.syncadapters.calendar com.google.android.syncadapters.contacts com.google.android.onetimeinitializer com.google.android.backuptransport com.google.android.feedback com.google.android.configupdater com.google.android.partnersetup com.google.android.setupwizard com.google.android.apps.restore"
+:ec_no_device
+echo [ERROR] No ADB device found. Start your emulator or connect a device.
+echo Tip: Use option 5 to enter HOST:PORT (e.g., 127.0.0.1:7555)
+echo Press any key to return to menu...
+pause >nul
+goto menu
 
-if /i "%ACTION%"=="disable" goto :do_disable
-if /i "%ACTION%"=="enable" goto :do_enable
-if /i "%ACTION%"=="status" goto :do_status
-if /i "%ACTION%"=="diag" goto :do_diag
-
-echo Unknown action: %ACTION%
-echo Usage: %~nx0 [disable^|enable^|status^|diag] [SERIAL_OR_HOST:PORT]
-exit /b 1
+:ec_unreachable
+echo [ERROR] Unable to reach "%TARGET%" via ADB.
+echo Ensure ADB is enabled on the emulator and the port is correct.
+echo Press any key to return to menu...
+pause >nul
+goto menu
 
 :do_disable
+call :ensure_connected
+if /i not "%CONNECTED_OK%"=="yes" goto menu
+cls
 echo Disabling/uninstalling Google packages for user 0 on %TARGET% ...
 for %%P in (%PACKAGES%) do (
   echo ^>^> %%P
-  rem Try modern uninstall command first
   adb -s "%TARGET%" shell cmd package uninstall -k --user 0 %%P >nul 2>&1
   if errorlevel 1 (
-    rem Fallback to legacy pm uninstall for user
     adb -s "%TARGET%" shell pm uninstall -k --user 0 %%P >nul 2>&1
   )
-  rem If uninstall not possible, attempt disabling
   adb -s "%TARGET%" shell pm disable-user --user 0 %%P >nul 2>&1
-  rem As a last resort, try set-disabled using cmd package (older/newer APIs)
-  adb -s "%TARGET%" shell cmd package set-enabled --user 0 false %%P >nul 2>&1
 )
-echo Done. Consider reboot: adb -s "%TARGET%" reboot
-exit /b 0
+echo.
+echo Done. It is recommended to reboot: adb -s "%TARGET%" reboot
+echo.
+echo Press any key to return to menu...
+pause >nul
+goto menu
 
 :do_enable
+call :ensure_connected
+if /i not "%CONNECTED_OK%"=="yes" goto menu
+cls
 echo Enabling/reinstalling Google packages for user 0 on %TARGET% ...
 for %%P in (%PACKAGES%) do (
   echo ^>^> %%P
-  rem Re-install existing system apps for user 0 if hidden
   adb -s "%TARGET%" shell pm install-existing --user 0 %%P >nul 2>&1
-  rem Enable via both pm and cmd package for wider compatibility
   adb -s "%TARGET%" shell pm enable --user 0 %%P >nul 2>&1
-  adb -s "%TARGET%" shell cmd package set-enabled --user 0 true %%P >nul 2>&1
 )
+echo.
 echo Done. You may reboot: adb -s "%TARGET%" reboot
-exit /b 0
+echo.
+echo Press any key to return to menu...
+pause >nul
+goto menu
 
 :do_status
+call :ensure_connected
+if /i not "%CONNECTED_OK%"=="yes" goto menu
+cls
 echo Package ^| Installed ^| Enabled
-echo ------------------------------
+echo --------------------------------
 for %%P in (%PACKAGES%) do (
   set "INST=no"
   set "EN=n/a"
@@ -105,10 +154,16 @@ for %%P in (%PACKAGES%) do (
   )
   echo %%P ^| !INST! ^| !EN!
 )
-exit /b 0
+echo.
+echo Press any key to return to menu...
+pause >nul
+goto menu
 
 :do_diag
-echo === ADB Info ===
+call :ensure_connected
+if /i not "%CONNECTED_OK%"=="yes" goto menu
+cls
+echo === ADB Version ===
 adb version
 echo.
 echo === Devices ===
@@ -125,5 +180,20 @@ adb -s "%TARGET%" shell pm path com.google.android.gms
 adb -s "%TARGET%" shell pm path com.google.android.gsf
 adb -s "%TARGET%" shell pm path com.android.vending
 echo.
-echo Tip: If no device, pass explicit HOST:PORT, e.g. 127.0.0.1:7555
+echo Press any key to return to menu...
+pause >nul
+goto menu
+
+:change_target
+cls
+echo Current target: %TARGET%
+set /p "TARGET=Enter SERIAL or HOST:PORT (e.g., 127.0.0.1:7555): "
+echo.
+echo Press any key to return to menu...
+pause >nul
+goto menu
+
+:end
+echo Exiting...
+timeout /t 1 >nul
 exit /b 0
